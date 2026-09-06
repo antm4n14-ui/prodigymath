@@ -7,46 +7,26 @@ export default function Home() {
   const [showConsole, setShowConsole] = useState(false);
   const [consoleLogs, setConsoleLogs] = useState<string[]>([]);
   const [consoleInput, setConsoleInput] = useState('');
+  const [iframeKey, setIframeKey] = useState(0);
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  const [injected, setInjected] = useState(false);
 
-  // Inject script into iframe
-  const injectConsole = () => {
-    const iframe = iframeRef.current;
-    if (!iframe) return;
-
-    try {
-      // Try to inject script into iframe content
-      const doc = iframe.contentDocument || iframe.contentWindow?.document;
-      if (doc) {
-        const script = doc.createElement('script');
-        script.textContent = `
-          console.log('🔥 F12 Console injected!');
-          window.addEventListener('message', (e) => {
-            if (e.data.type === 'execute') {
-              try {
-                const result = eval(e.data.code);
-                window.parent.postMessage({ type: 'result', result: String(result) }, '*');
-              } catch (err) {
-                window.parent.postMessage({ type: 'result', result: 'Error: ' + err.message }, '*');
-              }
-            }
-          });
-        `;
-        doc.head.appendChild(script);
-        setInjected(true);
-        setConsoleLogs(prev => [...prev, '✅ Console injected into page!']);
-      }
-    } catch (err) {
-      setConsoleLogs(prev => [...prev, '❌ Cannot inject (cross-origin)']);
-    }
-  };
-
+  // Keyboard shortcut: Ctrl+Shift+I
   useEffect(() => {
-    // Try to inject after iframe loads
-    const timer = setTimeout(injectConsole, 2000);
-    return () => clearTimeout(timer);
-  }, [url]);
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.shiftKey && e.key === 'I') {
+        e.preventDefault();
+        setShowConsole(prev => !prev);
+        if (!showConsole) {
+          setTimeout(() => {
+            const input = document.getElementById('console-input') as HTMLInputElement;
+            if (input) input.focus();
+          }, 100);
+        }
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [showConsole]);
 
   const navigateTo = (e: React.FormEvent) => {
     e.preventDefault();
@@ -56,24 +36,32 @@ export default function Home() {
       newUrl = 'https://' + newUrl;
     }
     setUrl(newUrl);
-    setInjected(false);
+    setIframeKey(prev => prev + 1);
     setConsoleLogs([]);
   };
 
+  // Execute JS in iframe using srcdoc method
   const executeJS = () => {
     if (!consoleInput.trim()) return;
 
-    // Send to iframe
     const iframe = iframeRef.current;
-    if (iframe && iframe.contentWindow) {
-      iframe.contentWindow.postMessage({
-        type: 'execute',
-        code: consoleInput
-      }, '*');
-      setConsoleLogs(prev => [...prev, `> ${consoleInput}`]);
+    if (iframe) {
+      try {
+        // Try to access iframe content
+        const doc = iframe.contentDocument || iframe.contentWindow?.document;
+        if (doc) {
+          const result = (doc as any).defaultView?.eval(consoleInput);
+          setConsoleLogs(prev => [...prev, `> ${consoleInput}`]);
+          if (result !== undefined) {
+            setConsoleLogs(prev => [...prev, `← ${JSON.stringify(result)}`]);
+          }
+        } else {
+          setConsoleLogs(prev => [...prev, '❌ Cannot access iframe (cross-origin)']);
+        }
+      } catch (err) {
+        setConsoleLogs(prev => [...prev, `❌ ${(err as Error).message}`]);
+      }
       setConsoleInput('');
-    } else {
-      setConsoleLogs(prev => [...prev, '❌ Cannot execute (iframe not ready)']);
     }
   };
 
@@ -88,10 +76,11 @@ export default function Home() {
         display: 'flex',
         alignItems: 'center',
         gap: '10px',
-        flexShrink: 0
+        flexShrink: 0,
+        flexWrap: 'wrap'
       }}>
         <span style={{ color: '#fff', fontWeight: 'bold', fontSize: '14px' }}>🌐</span>
-        <form onSubmit={navigateTo} style={{ flex: 1, display: 'flex', gap: '8px' }}>
+        <form onSubmit={navigateTo} style={{ flex: 1, display: 'flex', gap: '8px', minWidth: '200px' }}>
           <input
             type="text"
             defaultValue="https://www.google.com"
@@ -118,36 +107,36 @@ export default function Home() {
             Go
           </button>
         </form>
-        <button
-          onClick={injectConsole}
-          style={{
-            padding: '6px 14px',
-            borderRadius: '20px',
-            border: 'none',
-            background: '#28a745',
-            color: '#fff',
-            cursor: 'pointer',
-            fontSize: '12px'
-          }}
-        >
-          Inject
-        </button>
         <span style={{ color: '#888', fontSize: '11px' }}>
           Ctrl+Shift+I
         </span>
       </div>
 
-      {/* Iframe */}
+      {/* Iframe - Using srcdoc to bypass CORS */}
       <iframe
         ref={iframeRef}
-        src={url}
+        key={iframeKey}
+        srcDoc={`
+          <!DOCTYPE html>
+          <html>
+            <head>
+              <style>
+                body { margin: 0; overflow: hidden; }
+                iframe { width: 100vw; height: 100vh; border: none; }
+              </style>
+            </head>
+            <body>
+              <iframe src="${url}" style="width:100%;height:100%;border:none;"></iframe>
+            </body>
+          </html>
+        `}
         style={{
           flex: 1,
           width: '100%',
           border: 'none',
           background: '#fff'
         }}
-        sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
+        sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-top-navigation"
         title="Browser"
       />
 
@@ -207,8 +196,7 @@ export default function Home() {
             overflow: 'hidden',
             backdropFilter: 'blur(20px)',
             zIndex: 1000,
-            fontFamily: 'monospace',
-            cursor: 'default'
+            fontFamily: 'monospace'
           }}
         >
           {/* Header */}
@@ -220,7 +208,8 @@ export default function Home() {
               display: 'flex',
               justifyContent: 'space-between',
               alignItems: 'center',
-              flexShrink: 0
+              flexShrink: 0,
+              cursor: 'grab'
             }}
           >
             <span style={{ color: '#888', fontSize: '12px' }}>🔓 F12 Console</span>
